@@ -540,8 +540,6 @@ namespace gamescope
     private:
 
         void HandleKey( uint32_t uKey, bool bPressed );
-        xkb_mod_mask_t MapHostModifierMask( xkb_mod_mask_t uHostMask ) const;
-        void ApplyKeyboardModifiers();
 
         CWaylandBackend *m_pBackend = nullptr;
 
@@ -568,11 +566,7 @@ namespace gamescope
         xkb_context *m_pXkbContext = nullptr;
         xkb_keymap *m_pXkbKeymap = nullptr;
 
-        xkb_mod_mask_t m_uKeyModifiers = 0;
-        xkb_mod_mask_t m_uModsDepressed = 0;
-        xkb_mod_mask_t m_uModsLatched = 0;
-        xkb_mod_mask_t m_uModsLocked = 0;
-        xkb_layout_index_t m_uModsGroup = 0;
+        uint32_t m_uKeyModifiers = 0;
         xkb_mod_mask_t m_uModMask[ GAMESCOPE_WAYLAND_MOD_COUNT ] = {};
 
         double m_flScrollAccum[2] = { 0.0, 0.0 };
@@ -3003,37 +2997,6 @@ namespace gamescope
         wlserver_unlock();
     }
 
-    xkb_mod_mask_t CWaylandInputThread::MapHostModifierMask( xkb_mod_mask_t uHostMask ) const
-    {
-        if ( !m_pXkbKeymap )
-            return 0;
-
-        xkb_mod_mask_t uMappedMask = 0;
-        for ( uint32_t i = 0; i < GAMESCOPE_WAYLAND_MOD_COUNT; i++ )
-        {
-            if ( !( uHostMask & m_uModMask[ i ] ) )
-                continue;
-
-            uMappedMask |= wlserver_get_virtual_keyboard_mod_mask( WaylandModifierToXkbModifierName( (WaylandModifierIndex) i ) );
-        }
-
-        return uMappedMask;
-    }
-
-    void CWaylandInputThread::ApplyKeyboardModifiers()
-    {
-        if ( !m_pXkbKeymap )
-            return;
-
-        wlserver_lock();
-        wlserver_set_virtual_keyboard_modifiers(
-            MapHostModifierMask( m_uModsDepressed ),
-            MapHostModifierMask( m_uModsLatched ),
-            MapHostModifierMask( m_uModsLocked ),
-            m_uModsGroup );
-        wlserver_unlock();
-    }
-
     // Registry
 
     void CWaylandInputThread::Wayland_Registry_Global( wl_registry *pRegistry, uint32_t uName, const char *pInterface, uint32_t uVersion )
@@ -3228,8 +3191,6 @@ namespace gamescope
 
         for ( uint32_t i = 0; i < GAMESCOPE_WAYLAND_MOD_COUNT; i++ )
             m_uModMask[ i ] = WaylandKeymapModMask( m_pXkbKeymap, WaylandModifierToXkbModifierName( ( WaylandModifierIndex ) i ) );
-
-        ApplyKeyboardModifiers();
     }
     void CWaylandInputThread::Wayland_Keyboard_Enter( wl_keyboard *pKeyboard, uint32_t uSerial, wl_surface *pSurface, wl_array *pKeys )
     {
@@ -3264,14 +3225,11 @@ namespace gamescope
 
         m_bKeyboardEntered = false;
         m_uKeyModifiers = 0;
-        m_uModsDepressed = 0;
-        m_uModsLatched = 0;
 
         for ( uint32_t uKey : m_uScancodesHeld )
             HandleKey( uKey, false );
 
         m_uScancodesHeld.clear();
-        ApplyKeyboardModifiers();
     }
     void CWaylandInputThread::Wayland_Keyboard_Key( wl_keyboard *pKeyboard, uint32_t uSerial, uint32_t uTime, uint32_t uKey, uint32_t uState )
     {
@@ -3292,13 +3250,17 @@ namespace gamescope
     }
     void CWaylandInputThread::Wayland_Keyboard_Modifiers( wl_keyboard *pKeyboard, uint32_t uSerial, uint32_t uModsDepressed, uint32_t uModsLatched, uint32_t uModsLocked, uint32_t uGroup )
     {
-        m_uModsDepressed = uModsDepressed;
-        m_uModsLatched = uModsLatched;
-        m_uModsLocked = uModsLocked;
-        m_uModsGroup = uGroup;
-        m_uKeyModifiers = m_uModsDepressed | m_uModsLatched | m_uModsLocked;
+        m_uKeyModifiers = uModsDepressed | uModsLatched | uModsLocked;
 
-        ApplyKeyboardModifiers();
+        if ( !m_pXkbKeymap )
+            return;
+
+        const bool bNumLocked = !!( uModsLocked & m_uModMask [ GAMESCOPE_WAYLAND_MOD_NUM ] );
+        const bool bCapsLocked = !!( uModsLocked & m_uModMask [ GAMESCOPE_WAYLAND_MOD_CAPS ] );
+
+        wlserver_lock();
+        wlserver_set_virtual_keyboard_lock_modifiers( bNumLocked, bCapsLocked );
+        wlserver_unlock();
     }
     void CWaylandInputThread::Wayland_Keyboard_RepeatInfo( wl_keyboard *pKeyboard, int32_t nRate, int32_t nDelay )
     {
