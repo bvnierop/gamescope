@@ -75,6 +75,7 @@
 #include "gpuvis_trace_utils.h"
 
 #include <algorithm>
+#include <limits>
 #include <list>
 #include <set>
 
@@ -284,6 +285,47 @@ static void bump_input_counter()
 {
 	inputCounter++;
 	nudge_steamcompmgr();
+}
+
+static bool wlserver_ensure_virtual_keyboard_keymap()
+{
+	assert( wlserver_is_lock_held() );
+
+	struct wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
+	if ( keyboard == nullptr )
+		return false;
+
+	if ( keyboard->xkb_state != nullptr )
+		return true;
+
+	if ( wlserver.keyboard_group == nullptr || wlserver.keyboard_group->keyboard.keymap == nullptr )
+		return false;
+
+	return wlr_keyboard_set_keymap( keyboard, wlserver.keyboard_group->keyboard.keymap ) && keyboard->xkb_state != nullptr;
+}
+
+static xkb_mod_mask_t wlserver_keymap_mod_mask( struct xkb_keymap *keymap, const char *pszName )
+{
+	if ( keymap == nullptr )
+		return 0;
+
+	xkb_mod_index_t uModIndex = xkb_keymap_mod_get_index( keymap, pszName );
+	if ( uModIndex == XKB_MOD_INVALID || uModIndex >= std::numeric_limits<xkb_mod_mask_t>::digits )
+		return 0;
+
+	return xkb_mod_mask_t{ 1 } << uModIndex;
+}
+
+static xkb_layout_index_t wlserver_clamp_virtual_keyboard_group( struct wlr_keyboard *keyboard, xkb_layout_index_t uGroup )
+{
+	if ( keyboard == nullptr || keyboard->keymap == nullptr )
+		return 0;
+
+	xkb_layout_index_t uNumLayouts = xkb_keymap_num_layouts( keyboard->keymap );
+	if ( uNumLayouts == 0 || uGroup >= uNumLayouts )
+		return 0;
+
+	return uGroup;
 }
 
 static void wlserver_handle_modifiers(struct wl_listener *listener, void *data)
@@ -2031,6 +2073,8 @@ bool wlserver_init( void ) {
 	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
 	wlserver.keyboard_group = wlr_keyboard_group_create();
 	struct wlr_keyboard *keyboard = &wlserver.keyboard_group->keyboard;
+	wlr_keyboard_set_repeat_info(kbd, 25, 600);
+	wlr_keyboard_set_keymap(kbd, keymap);
 	wlr_keyboard_set_repeat_info(keyboard, 25, 600);
 	wlr_keyboard_set_keymap(keyboard, keymap);
 	wlserver.keyboard_group_modifiers.notify = wlserver_handle_modifiers;
@@ -2366,6 +2410,9 @@ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain )
 
 bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press )
 {
+	if ( keyboard == nullptr || keyboard->xkb_state == nullptr )
+		return false;
+
 	xkb_keycode_t keycode = key + 8;
 	xkb_keysym_t keysym = xkb_state_key_get_one_sym( keyboard->xkb_state, keycode );
 
@@ -2413,6 +2460,33 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	}
 
 	return false;
+}
+
+xkb_mod_mask_t wlserver_get_virtual_keyboard_mod_mask( const char *pszName )
+{
+	assert( wlserver_is_lock_held() );
+
+	if ( !wlserver_ensure_virtual_keyboard_keymap() )
+		return 0;
+
+	return wlserver_keymap_mod_mask( wlserver.wlr.virtual_keyboard_device->keymap, pszName );
+}
+
+void wlserver_set_virtual_keyboard_modifiers( xkb_mod_mask_t uModsDepressed, xkb_mod_mask_t uModsLatched, xkb_mod_mask_t uModsLocked, xkb_layout_index_t uGroup )
+{
+	assert( wlserver_is_lock_held() );
+
+	struct wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
+	if ( keyboard == nullptr || !wlserver_ensure_virtual_keyboard_keymap() )
+		return;
+
+	uGroup = wlserver_clamp_virtual_keyboard_group( keyboard, uGroup );
+
+	wlr_keyboard_notify_modifiers( keyboard, uModsDepressed, uModsLatched, uModsLocked, uGroup );
+	wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
+	wlr_seat_keyboard_notify_modifiers( wlserver.wlr.seat, &keyboard->modifiers );
+
+	bump_input_counter();
 }
 
 void wlserver_key( uint32_t key, bool press, uint32_t time )
