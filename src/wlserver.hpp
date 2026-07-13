@@ -245,6 +245,7 @@ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true
 void wlserver_key( uint32_t key, bool press, uint32_t time );
 void wlserver_set_virtual_keyboard_keymap( struct xkb_keymap *keymap );
 void wlserver_set_virtual_keyboard_modifiers( uint32_t uModsDepressed, uint32_t uModsLatched, uint32_t uModsLocked, uint32_t uGroup );
+void wlserver_set_virtual_keyboard_locks( bool bNumLock, bool bCapsLock );
 
 void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0 );
 void wlserver_clear_dropdowns();

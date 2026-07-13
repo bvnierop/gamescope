@@ -8,6 +8,7 @@
 
 #include <linux/input-event-codes.h>
 #include <signal.h>
+#include <string.h>
 
 #include "SDL_clipboard.h"
 #include "SDL_events.h"
@@ -185,6 +186,7 @@ namespace gamescope
 		virtual void OnBackendBlobDestroyed( BackendBlob *pBlob ) override;
 	private:
 		void SDLThreadFunc();
+		void SyncSDLLockState( bool bForce = false );
 
 		uint32_t GetUserEventIndex( SDLCustomEvents eEvent ) const;
 		void PushUserEvent( SDLCustomEvents eEvent );
@@ -205,6 +207,11 @@ namespace gamescope
 		SDL_Surface *m_pIconSurface = nullptr;
 		SDL_Surface *m_pCursorSurface = nullptr;
 		SDL_Cursor *m_pCursor = nullptr;
+
+		bool m_bSDLLockSyncEnabled = false;
+		bool m_bSDLLockStateInitialized = false;
+		bool m_bSDLNumLock = false;
+		bool m_bSDLCapsLock = false;
 	};
 
 	//////////////////
@@ -560,6 +567,27 @@ namespace gamescope
 		// Do nothing.
 	}
 
+	void CSDLBackend::SyncSDLLockState( bool bForce )
+	{
+		if ( !m_bSDLLockSyncEnabled )
+			return;
+
+		SDL_Keymod eMods = SDL_GetModState();
+		bool bNumLock = ( eMods & KMOD_NUM ) != 0;
+		bool bCapsLock = ( eMods & KMOD_CAPS ) != 0;
+
+		if ( !bForce && m_bSDLLockStateInitialized && bNumLock == m_bSDLNumLock && bCapsLock == m_bSDLCapsLock )
+			return;
+
+		wlserver_lock();
+		wlserver_set_virtual_keyboard_locks( bNumLock, bCapsLock );
+		wlserver_unlock();
+
+		m_bSDLLockStateInitialized = true;
+		m_bSDLNumLock = bNumLock;
+		m_bSDLCapsLock = bCapsLock;
+	}
+
 	void CSDLBackend::SDLThreadFunc()
 	{
 		pthread_setname_np( pthread_self(), "gamescope-sdl" );
@@ -595,6 +623,9 @@ namespace gamescope
 			m_eSDLInit.notify_all();
 			return;
 		}
+
+		const char *pszSDLVideoDriver = SDL_GetCurrentVideoDriver();
+		m_bSDLLockSyncEnabled = pszSDLVideoDriver != nullptr && strcmp( pszSDLVideoDriver, "wayland" ) == 0;
 
 		if ( !vulkan_init( vulkan_get_instance(), m_Connector.GetVulkanSurface() ) )
 		{
@@ -641,6 +672,7 @@ namespace gamescope
 		static uint32_t fake_timestamp = 0;
 
 		wlserver.bWaylandServerRunning.wait( false );
+		SyncSDLLockState( true );
 
 		SDL_Event event;
 		while( SDL_WaitEvent( &event ) )
@@ -802,11 +834,24 @@ namespace gamescope
 					if ( event.key.repeat )
 						break;
 
+					bool bLockKey = key == KEY_NUMLOCK || key == KEY_CAPSLOCK;
+					if ( !bLockKey )
+						SyncSDLLockState();
+
 					wlserver_lock();
 					wlserver_key( key, event.type == SDL_KEYDOWN, fake_timestamp );
 					wlserver_unlock();
+
+					if ( bLockKey )
+						SyncSDLLockState();
 				}
 				break;
+
+#if SDL_VERSION_ATLEAST(2, 0, 4)
+				case SDL_KEYMAPCHANGED:
+					SyncSDLLockState();
+					break;
+#endif
 
 				case SDL_WINDOWEVENT:
 				{
@@ -850,6 +895,7 @@ namespace gamescope
 						case SDL_WINDOWEVENT_FOCUS_GAINED:
 							g_nNestedRefresh = g_nOldNestedRefresh;
 							g_bWindowFocused = true;
+							SyncSDLLockState();
 							break;
 						case SDL_WINDOWEVENT_EXPOSED:
 							force_repaint();

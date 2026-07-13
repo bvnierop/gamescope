@@ -2442,6 +2442,49 @@ void wlserver_set_virtual_keyboard_modifiers( uint32_t uModsDepressed, uint32_t 
 	bump_input_counter();
 }
 
+static xkb_mod_mask_t wlserver_keymap_mod_mask( struct xkb_keymap *keymap, const char *pszName )
+{
+	if ( keymap == nullptr )
+		return 0;
+
+	xkb_mod_index_t uModIndex = xkb_keymap_mod_get_index( keymap, pszName );
+	if ( uModIndex == XKB_MOD_INVALID || uModIndex >= sizeof( xkb_mod_mask_t ) * 8 )
+		return 0;
+
+	return xkb_mod_mask_t{ 1 } << uModIndex;
+}
+
+void wlserver_set_virtual_keyboard_locks( bool bNumLock, bool bCapsLock )
+{
+	assert( wlserver_is_lock_held() );
+
+	struct wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
+	if ( keyboard == nullptr || keyboard->xkb_state == nullptr )
+		return;
+
+	xkb_mod_mask_t uModsLocked = keyboard->modifiers.locked;
+
+	xkb_mod_mask_t uNumLockMask = wlserver_keymap_mod_mask( keyboard->keymap, XKB_MOD_NAME_NUM );
+	if ( uNumLockMask != 0 )
+	{
+		if ( bNumLock )
+			uModsLocked |= uNumLockMask;
+		else
+			uModsLocked &= ~uNumLockMask;
+	}
+
+	xkb_mod_mask_t uCapsLockMask = wlserver_keymap_mod_mask( keyboard->keymap, XKB_MOD_NAME_CAPS );
+	if ( uCapsLockMask != 0 )
+	{
+		if ( bCapsLock )
+			uModsLocked |= uCapsLockMask;
+		else
+			uModsLocked &= ~uCapsLockMask;
+	}
+
+	wlserver_set_virtual_keyboard_modifiers( keyboard->modifiers.depressed, keyboard->modifiers.latched, uModsLocked, keyboard->modifiers.group );
+}
+
 void wlserver_key( uint32_t key, bool press, uint32_t time )
 {
 	assert( wlserver_is_lock_held() );
