@@ -18,7 +18,6 @@
 #include <SDL_vulkan.h>
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
-#include "Utils/Defer.h"
 #include "refresh_rate.h"
 
 #include "sdlscancodetable.hpp"
@@ -186,6 +185,7 @@ namespace gamescope
 		virtual void OnBackendBlobDestroyed( BackendBlob *pBlob ) override;
 	private:
 		void SDLThreadFunc();
+		void SyncLockModifiersFromSDL();
 
 		uint32_t GetUserEventIndex( SDLCustomEvents eEvent ) const;
 		void PushUserEvent( SDLCustomEvents eEvent );
@@ -568,6 +568,17 @@ namespace gamescope
 		// Do nothing.
 	}
 
+	void CSDLBackend::SyncLockModifiersFromSDL()
+	{
+		const SDL_Keymod mods = SDL_GetModState();
+
+		wlserver_lock();
+		wlserver_set_virtual_keyboard_modifiers(
+			( mods & KMOD_NUM ) != 0,
+			( mods & KMOD_CAPS ) != 0 );
+		wlserver_unlock();
+	}
+
 	void CSDLBackend::SDLThreadFunc()
 	{
 		pthread_setname_np( pthread_self(), "gamescope-sdl" );
@@ -649,6 +660,7 @@ namespace gamescope
 		static uint32_t fake_timestamp = 0;
 
 		wlserver.bWaylandServerRunning.wait( false );
+		SyncLockModifiersFromSDL();
 
 		SDL_Event event;
 		while( SDL_WaitEvent( &event ) )
@@ -814,6 +826,8 @@ namespace gamescope
 					wlserver_lock();
 					wlserver_key( key, event.type == SDL_KEYDOWN, fake_timestamp );
 					wlserver_unlock();
+
+					SyncLockModifiersFromSDL();
 				}
 				break;
 
@@ -859,6 +873,7 @@ namespace gamescope
 						case SDL_WINDOWEVENT_FOCUS_GAINED:
 							g_nNestedRefresh = g_nOldNestedRefresh;
 							g_bWindowFocused = true;
+							SyncLockModifiersFromSDL();
 							break;
 						case SDL_WINDOWEVENT_EXPOSED:
 							force_repaint();
