@@ -3191,6 +3191,10 @@ namespace gamescope
 
         for ( uint32_t i = 0; i < GAMESCOPE_WAYLAND_MOD_COUNT; i++ )
             m_uModMask[ i ] = WaylandKeymapModMask( m_pXkbKeymap, WaylandModifierToXkbModifierName( ( WaylandModifierIndex ) i ) );
+
+        wlserver_lock();
+        wlserver_set_virtual_keyboard_keymap( m_pXkbKeymap );
+        wlserver_unlock();
     }
     void CWaylandInputThread::Wayland_Keyboard_Enter( wl_keyboard *pKeyboard, uint32_t uSerial, wl_surface *pSurface, wl_array *pKeys )
     {
@@ -3252,14 +3256,8 @@ namespace gamescope
     {
         m_uKeyModifiers = uModsDepressed | uModsLatched | uModsLocked;
 
-        if ( !m_pXkbKeymap )
-            return;
-
-        const bool bNumLocked = !!( uModsLocked & m_uModMask [ GAMESCOPE_WAYLAND_MOD_NUM ] );
-        const bool bCapsLocked = !!( uModsLocked & m_uModMask [ GAMESCOPE_WAYLAND_MOD_CAPS ] );
-
         wlserver_lock();
-        wlserver_set_virtual_keyboard_lock_modifiers( bNumLocked, bCapsLocked );
+        wlserver_set_virtual_keyboard_modifiers( uModsDepressed, uModsLatched, uModsLocked, uGroup );
         wlserver_unlock();
     }
     void CWaylandInputThread::Wayland_Keyboard_RepeatInfo( wl_keyboard *pKeyboard, int32_t nRate, int32_t nDelay )

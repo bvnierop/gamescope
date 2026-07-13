@@ -75,7 +75,6 @@
 #include "gpuvis_trace_utils.h"
 
 #include <algorithm>
-#include <limits>
 #include <list>
 #include <set>
 
@@ -285,18 +284,6 @@ static void bump_input_counter()
 {
 	inputCounter++;
 	nudge_steamcompmgr();
-}
-
-static xkb_mod_mask_t wlserver_keymap_mod_mask( struct xkb_keymap *keymap, const char *pszName )
-{
-	if ( keymap == nullptr )
-		return 0;
-
-	xkb_mod_index_t uModIndex = xkb_keymap_mod_get_index( keymap, pszName );
-	if ( uModIndex == XKB_MOD_INVALID || uModIndex >= std::numeric_limits<xkb_mod_mask_t>::digits )
-		return 0;
-
-	return xkb_mod_mask_t{ 1 } << uModIndex;
 }
 
 static void wlserver_handle_modifiers(struct wl_listener *listener, void *data)
@@ -2429,27 +2416,26 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 	return false;
 }
 
-void wlserver_set_virtual_keyboard_lock_modifiers( bool bNumLocked, bool bCapsLocked )
+void wlserver_set_virtual_keyboard_keymap( struct xkb_keymap *keymap )
 {
 	assert( wlserver_is_lock_held() );
 
 	struct wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
-	if ( keyboard == nullptr || keyboard->keymap == nullptr || keyboard->xkb_state == nullptr )
+	if ( keyboard == nullptr )
 		return;
 
-    xkb_mod_mask_t uLocked = 0;
-    if (bNumLocked)
-        uLocked |= wlserver_keymap_mod_mask( keyboard->keymap, XKB_MOD_NAME_NUM );
-    if (bCapsLocked)
-        uLocked |= wlserver_keymap_mod_mask( keyboard->keymap, XKB_MOD_NAME_CAPS );
-    
-	wlr_keyboard_notify_modifiers(
-        keyboard,
-        keyboard->modifiers.depressed,
-        keyboard->modifiers.latched,
-        uLocked,
-        keyboard->modifiers.group );
-                                   
+	wlr_keyboard_set_keymap( keyboard, keymap );
+}
+
+void wlserver_set_virtual_keyboard_modifiers( uint32_t uModsDepressed, uint32_t uModsLatched, uint32_t uModsLocked, uint32_t uGroup )
+{
+	assert( wlserver_is_lock_held() );
+
+	struct wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
+	if ( keyboard == nullptr || keyboard->xkb_state == nullptr )
+		return;
+
+	wlr_keyboard_notify_modifiers( keyboard, uModsDepressed, uModsLatched, uModsLocked, uGroup );
 	wlr_seat_set_keyboard( wlserver.wlr.seat, keyboard );
 	wlr_seat_keyboard_notify_modifiers( wlserver.wlr.seat, &keyboard->modifiers );
 
