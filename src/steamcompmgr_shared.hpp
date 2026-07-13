@@ -186,6 +186,14 @@ struct steamcompmgr_win_t {
 			return nullptr;
 	}
 
+	void Raise() const
+	{
+		if (type != steamcompmgr_win_type_t::XWAYLAND)
+			return;
+
+		XRaiseWindow(xwayland().ctx->dpy, xwayland().id);
+	}
+
 	Rect GetGeometry() const
 	{
 		if (type == steamcompmgr_win_type_t::XWAYLAND)

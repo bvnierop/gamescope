@@ -134,6 +134,7 @@ namespace gamescope
 	{
 	public:
 		CSDLBackend();
+		~CSDLBackend();
 
 		/////////////
 		// IBackend
@@ -403,6 +404,13 @@ namespace gamescope
 		: m_Connector{ this }
 		, m_SDLThread{ [this](){ this->SDLThreadFunc(); } }
 	{
+	}
+
+	CSDLBackend::~CSDLBackend() {
+		SDL_Event event = { .type = SDL_QUIT };
+		SDL_PushEvent(&event);
+		if (m_SDLThread.joinable())
+			m_SDLThread.join();
 	}
 
 	bool CSDLBackend::Init()
@@ -681,6 +689,7 @@ namespace gamescope
 
 			switch( event.type )
 			{
+				case SDL_QUIT: return;
 				case SDL_CLIPBOARDUPDATE:
 				{
 					char *pClipBoard = SDL_GetClipboardText();

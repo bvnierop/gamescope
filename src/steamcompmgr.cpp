@@ -1920,8 +1920,8 @@ void MouseCursor::paint(steamcompmgr_win_t *window, steamcompmgr_win_t *fit, str
 	if ( fit )
 	{
 		// If we have an override window, try to fit it in as long as it won't make our scale go below 1.0.
-		sourceWidth = std::max<int32_t>( sourceWidth, clamp<int>( fit->GetGeometry().nX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
-		sourceHeight = std::max<int32_t>( sourceHeight, clamp<int>( fit->GetGeometry().nY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
+		sourceWidth = std::max<int32_t>( sourceWidth, clamp<int>( fit->GetGeometry().nX - window->GetGeometry().nX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
+		sourceHeight = std::max<int32_t>( sourceHeight, clamp<int>( fit->GetGeometry().nY - window->GetGeometry().nY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
 	}
 
 	float cursor_scale = 1.0f;
@@ -2145,15 +2145,21 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 		if ( fit )
 		{
 			// If we have an override window, try to fit it in as long as it won't make our scale go below 1.0.
-			sourceWidth = std::max<uint32_t>( sourceWidth, clamp<int>( fit->GetGeometry().nX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
-			sourceHeight = std::max<uint32_t>( sourceHeight, clamp<int>( fit->GetGeometry().nY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
+			int32_t fitX = fit->GetGeometry().nX - scaleW->GetGeometry().nX;
+			int32_t fitY = fit->GetGeometry().nY - scaleW->GetGeometry().nY;
+			sourceWidth = std::max<uint32_t>( sourceWidth, clamp<int>( fitX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
+			sourceHeight = std::max<uint32_t>( sourceHeight, clamp<int>( fitY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
 
-			baseWidth = std::max<uint32_t>( baseWidth, clamp<int>( fit->GetGeometry().nX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
-			baseHeight = std::max<uint32_t>( baseHeight, clamp<int>( fit->GetGeometry().nY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
+			baseWidth = std::max<uint32_t>( baseWidth, clamp<int>( fitX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
+			baseHeight = std::max<uint32_t>( baseHeight, clamp<int>( fitY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
 		}
 	}
 
-	bool offset = ( ( w->GetGeometry().nX || w->GetGeometry().nY ) && w != scaleW );
+	// Compositing ignores the base window's origin, so position overrides relative to it.
+	int32_t winOffsetX = w->GetGeometry().nX - scaleW->GetGeometry().nX;
+	int32_t winOffsetY = w->GetGeometry().nY - scaleW->GetGeometry().nY;
+
+	bool offset = ( ( winOffsetX || winOffsetY ) && w != scaleW );
 
 	if (sourceWidth != (int32_t)currentOutputWidth || sourceHeight != (int32_t)currentOutputHeight || offset || globalScaleRatio != 1.0f)
 	{
@@ -2164,8 +2170,8 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 		if ( w != scaleW )
 		{
-			drawXOffset += w->GetGeometry().nX * currentScaleRatio_x;
-			drawYOffset += w->GetGeometry().nY * currentScaleRatio_y;
+			drawXOffset += winOffsetX * currentScaleRatio_x;
+			drawYOffset += winOffsetY * currentScaleRatio_y;
 		}
 
 		calc_scale_factor(baseScaleRatio_x, baseScaleRatio_y, baseWidth, baseHeight);
@@ -3912,7 +3918,14 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
 		}
 
 		if ( !ctx->focus.overrideWindow || ctx->focus.overrideWindow != keyboardFocusWin )
+		{
 			XSetInputFocus(ctx->dpy, keyboardFocusWin->xwayland().id, RevertToNone, CurrentTime);
+
+			// wine >= 10.0 treats _NET_ACTIVE_WINDOW as foreground, so it must track real keyboard focus.
+			Window activeWindow = keyboardFocusWin->xwayland().id;
+			XChangeProperty(ctx->dpy, ctx->root, ctx->atoms.netActiveWindowAtom,
+							XA_WINDOW, 32, PropModeReplace, (unsigned char *)&activeWindow, 1);
+		}
 
 		if ( ctx->focus.inputFocusWindow != inputFocus ||
 			 ctx->focus.inputFocusMode != inputFocus->inputFocusMode )
@@ -3942,19 +3955,10 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
 	w = ctx->focus.focusWindow;
 
 	if ( inputFocus == ctx->focus.focusWindow && ctx->focus.overrideWindowMouse )
-	{
-		if ( ctx->list[0].xwayland().id != ctx->focus.overrideWindowMouse->xwayland().id )
-		{
-			XRaiseWindow(ctx->dpy, ctx->focus.overrideWindowMouse->xwayland().id);
-		}
-	}
-	else
-	{
-		if ( ctx->list[0].xwayland().id != inputFocus->xwayland().id )
-		{
-			XRaiseWindow(ctx->dpy, inputFocus->xwayland().id);
-		}
-	}
+		inputFocus = ctx->focus.overrideWindowMouse;
+
+	if ( ctx->list[0].xwayland().id != inputFocus->xwayland().id )
+		inputFocus->Raise();
 
 	if (!ctx->focus.focusWindow->nudged)
 	{
@@ -4302,28 +4306,6 @@ determine_and_apply_focus( global_focus_t *pFocus )
 			}
 		}
 
-		if ( pFocus->inputFocusWindow )
-		{
-			// Cannot simply XWarpPointer here as we immediately go on to
-			// do wlserver_mousefocus and need to update m_x and m_y of the cursor.
-			if ( pFocus->inputFocusWindow->GetFocus()->bResetToCorner )
-			{
-				wlserver_lock();
-				wlserver_mousewarp( pFocus->inputFocusWindow->GetGeometry().nWidth / 2, pFocus->inputFocusWindow->GetGeometry().nHeight / 2, 0, true );
-				wlserver_fake_mouse_pos( pFocus->inputFocusWindow->GetGeometry().nWidth - 1, pFocus->inputFocusWindow->GetGeometry().nHeight - 1 );
-				wlserver_unlock();
-			}
-			else if ( pFocus->inputFocusWindow->GetFocus()->bResetToCenter )
-			{
-				wlserver_lock();
-				wlserver_mousewarp( pFocus->inputFocusWindow->GetGeometry().nWidth / 2, pFocus->inputFocusWindow->GetGeometry().nHeight / 2, 0, true );
-				wlserver_unlock();
-			}
-
-			pFocus->inputFocusWindow->GetFocus()->bResetToCorner = false;
-			pFocus->inputFocusWindow->GetFocus()->bResetToCenter = false;
-		}
-
 		s_ulPreviousGlobalFocusKey = pFocus->ulVirtualFocusKey;
 	}
 
@@ -4342,7 +4324,14 @@ determine_and_apply_focus( global_focus_t *pFocus )
 
 				wlserver_clear_dropdowns();
 				if ( win_surface( pFocus->overrideWindow ) != nullptr )
-					wlserver_notify_dropdown( pFocus->overrideWindow->main_surface(), pFocus->overrideWindow->xwayland().a.x, pFocus->overrideWindow->xwayland().a.y );
+				{
+					// Relative to the focus window's origin, matching the cursor's coordinate space.
+					int32_t nBaseX = pFocus->focusWindow ? pFocus->focusWindow->GetGeometry().nX : 0;
+					int32_t nBaseY = pFocus->focusWindow ? pFocus->focusWindow->GetGeometry().nY : 0;
+					wlserver_notify_dropdown( pFocus->overrideWindow->main_surface(),
+											  pFocus->overrideWindow->xwayland().a.x - nBaseX,
+											  pFocus->overrideWindow->xwayland().a.y - nBaseY );
+				}
 
 				if ( gamescope::VirtualConnectorInSteamPerAppState() && pFocus->inputFocusWindow )
 				{
@@ -4832,9 +4821,7 @@ map_win(xwayland_ctx_t* ctx, Window id, unsigned long sequence)
 	if ( wmHints != nullptr )
 	{
 		if ( wmHints->flags & (InputHint | StateHint ) && wmHints->input == true && wmHints->initial_state == NormalState )
-		{
-			XRaiseWindow( ctx->dpy, w->xwayland().id );
-		}
+			w->Raise();
 
 		XFree( wmHints );
 	}
@@ -5560,9 +5547,9 @@ handle_client_message(xwayland_ctx_t *ctx, XClientMessageEvent *ev)
 		{
 			handle_wl_surface_id( ctx, w, uint32_t(ev->data.l[0]));
 		}
-		else if ( ev->message_type == ctx->atoms.activeWindowAtom )
+		else if ( ev->message_type == ctx->atoms.netActiveWindowAtom )
 		{
-			XRaiseWindow( ctx->dpy, w->xwayland().id );
+			w->Raise();
 		}
 		else if ( ev->message_type == ctx->atoms.netWMStateAtom )
 		{
@@ -7795,7 +7782,7 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
 	ctx->atoms.winNormalAtom = XInternAtom(ctx->dpy, "_NET_WM_WINDOW_TYPE_NORMAL", false);
 	ctx->atoms.sizeHintsAtom = XInternAtom(ctx->dpy, "WM_NORMAL_HINTS", false);
 	ctx->atoms.netWMStateFullscreenAtom = XInternAtom(ctx->dpy, "_NET_WM_STATE_FULLSCREEN", false);
-	ctx->atoms.activeWindowAtom = XInternAtom(ctx->dpy, "_NET_ACTIVE_WINDOW", false);
+	ctx->atoms.netActiveWindowAtom = XInternAtom(ctx->dpy, "_NET_ACTIVE_WINDOW", false);
 	ctx->atoms.netWMStateAtom = XInternAtom(ctx->dpy, "_NET_WM_STATE", false);
 	ctx->atoms.WMTransientForAtom = XInternAtom(ctx->dpy, "WM_TRANSIENT_FOR", false);
 	ctx->atoms.netWMStateHiddenAtom = XInternAtom(ctx->dpy, "_NET_WM_STATE_HIDDEN", false);
